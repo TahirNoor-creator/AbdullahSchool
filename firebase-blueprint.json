@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "SchoolConfig": {
+      "title": "SchoolConfig",
+      "description": "Master school profile and configuration details",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string", "maxLength": 200 },
+        "schoolCode": { "type": "string", "maxLength": 50 },
+        "registrationNo": { "type": "string", "maxLength": 100 },
+        "address": { "type": "string", "maxLength": 300 },
+        "contactEmail": { "type": "string", "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "principalName": { "type": "string", "maxLength": 150 },
+        "establishedYear": { "type": "string", "maxLength": 10 },
+        "logoUrl": { "type": "string", "maxLength": 1000 },
+        "currency": { "type": "string", "maxLength": 10 },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["schoolName", "schoolCode"]
+    },
+    "Campus": {
+      "title": "Campus",
+      "description": "Multi-campus branch details",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "maxLength": 150 },
+        "code": { "type": "string", "maxLength": 50 },
+        "address": { "type": "string", "maxLength": 250 },
+        "principal": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["active", "inactive"] }
+      },
+      "required": ["name", "code", "status"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student enrollment and academic profile",
+      "type": "object",
+      "properties": {
+        "admissionNo": { "type": "string", "maxLength": 50 },
+        "fullName": { "type": "string", "maxLength": 150 },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
+        "dob": { "type": "string", "maxLength": 20 },
+        "className": { "type": "string", "maxLength": 50 },
+        "section": { "type": "string", "maxLength": 20 },
+        "rollNo": { "type": "string", "maxLength": 20 },
+        "campusId": { "type": "string", "maxLength": 100 },
+        "parentName": { "type": "string", "maxLength": 150 },
+        "parentEmail": { "type": "string", "maxLength": 150 },
+        "parentPhone": { "type": "string", "maxLength": 50 },
+        "status": { "type": "string", "enum": ["active", "suspended", "graduated", "transferred"] },
+        "feesDue": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["admissionNo", "fullName", "className", "status"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance record for a class or department",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 20 },
+        "className": { "type": "string", "maxLength": 50 },
+        "section": { "type": "string", "maxLength": 20 },
+        "campusId": { "type": "string", "maxLength": 100 },
+        "totalStudents": { "type": "number" },
+        "presentCount": { "type": "number" },
+        "absentCount": { "type": "number" },
+        "lateCount": { "type": "number" },
+        "markedBy": { "type": "string", "maxLength": 150 },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["date", "className", "totalStudents"]
+    },
+    "FeeInvoice": {
+      "title": "FeeInvoice",
+      "description": "Tuition or term fee invoice for students",
+      "type": "object",
+      "properties": {
+        "invoiceNo": { "type": "string", "maxLength": 50 },
+        "studentId": { "type": "string", "maxLength": 100 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "className": { "type": "string", "maxLength": 50 },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "balance": { "type": "number" },
+        "dueDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["unpaid", "partial", "paid", "overdue"] },
+        "title": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["invoiceNo", "studentName", "totalAmount", "status"]
+    },
+    "FeePayment": {
+      "title": "FeePayment",
+      "description": "Fee receipt and payment confirmation",
+      "type": "object",
+      "properties": {
+        "receiptNo": { "type": "string", "maxLength": 50 },
+        "invoiceNo": { "type": "string", "maxLength": 50 },
+        "studentName": { "type": "string", "maxLength": 150 },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Cash", "Card", "Bank Transfer", "Online", "Cheque"] },
+        "referenceNo": { "type": "string", "maxLength": 100 },
+        "paymentDate": { "type": "string", "maxLength": 20 },
+        "recordedBy": { "type": "string", "maxLength": 150 }
+      },
+      "required": ["receiptNo", "invoiceNo", "amount", "paymentMethod"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "School-wide broadcast announcement",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 2000 },
+        "priority": { "type": "string", "enum": ["info", "warning", "maintenance", "emergency"] },
+        "target": { "type": "string", "maxLength": 100 },
+        "author": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "message", "priority"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative actions audit log",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string" },
+        "userEmail": { "type": "string", "maxLength": 150 },
+        "role": { "type": "string", "maxLength": 50 },
+        "module": { "type": "string", "maxLength": 50 },
+        "action": { "type": "string", "maxLength": 100 },
+        "recordId": { "type": "string", "maxLength": 100 },
+        "details": { "type": "string", "maxLength": 500 },
+        "result": { "type": "string", "enum": ["success", "failed", "pending"] }
+      },
+      "required": ["timestamp", "userEmail", "module", "action"]
+    }
+  },
+  "firestore": {
+    "/school_config/{configId}": {
+      "schema": "SchoolConfig",
+      "description": "School general settings and profile"
+    },
+    "/campuses/{campusId}": {
+      "schema": "Campus",
+      "description": "Campuses list"
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Enrolled students records"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "AttendanceRecord",
+      "description": "Daily attendance batches"
+    },
+    "/fee_invoices/{invoiceId}": {
+      "schema": "FeeInvoice",
+      "description": "Student fee invoices"
+    },
+    "/fee_payments/{paymentId}": {
+      "schema": "FeePayment",
+      "description": "Fee payment receipts"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Notice board and broadcast announcements"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Immutable administrative audit trail"
+    }
+  }
+}
