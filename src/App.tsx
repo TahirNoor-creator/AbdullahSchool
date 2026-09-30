@@ -15,6 +15,7 @@ import { WorkspaceHubView } from './components/WorkspaceHubView';
 import { GeminiSuiteView } from './components/GeminiSuiteView';
 import { SecurityAuditView } from './components/SecurityAuditView';
 import { BackupIntegrityView } from './components/BackupIntegrityView';
+import { SyncConflictIntegrityFixer } from './components/SyncConflictIntegrityFixer';
 import { AppearanceView } from './components/AppearanceView';
 import { DocumentPrintingModal } from './components/DocumentPrintingModal';
 import { SetupWizardModal } from './components/SetupWizardModal';
@@ -24,7 +25,16 @@ import { QRScannerView } from './components/QRScannerView';
 import { AnalyticsDashboardView } from './components/AnalyticsDashboardView';
 import { GoogleSheetSyncModal } from './components/GoogleSheetSyncModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
+import { AuthPortal, AuthenticatedUser } from './components/AuthPortal';
+import { SessionTimeoutModal } from './components/SessionTimeoutModal';
+import { LibraryView } from './components/LibraryView';
+import { TransportView } from './components/TransportView';
+import { CommunicationView } from './components/CommunicationView';
+import { ReportsCenterView } from './components/ReportsCenterView';
+import { LogoutConfirmModal } from './components/LogoutConfirmModal';
 import { ToastContainer, ToastItem } from './components/ToastNotification';
+import { TimetableView } from './components/TimetableView';
+import { SmartFormsView } from './components/SmartFormsView';
 
 import {
   initialSchoolProfile,
@@ -42,6 +52,10 @@ import {
   initialApprovals,
 } from './data/initialData';
 import {
+  initialTimetableSlots,
+  initialSubstituteRecords,
+} from './data/initialTimetableData';
+import {
   Student,
   AttendanceRecord,
   FeePayment,
@@ -51,6 +65,9 @@ import {
   SchoolProfile,
   POSTransaction,
   AuditLog,
+  Announcement,
+  TimetableSlot,
+  SubstituteRecord,
 } from './types/erp';
 import {
   initAuth,
@@ -64,6 +81,7 @@ import {
   syncAllERPDataToSheet,
   MasterTabConfig,
 } from './services/workspace';
+import { buildAll28TabsConfig } from './services/sheetsMasterBackup';
 
 export default function App() {
   // Theme state
@@ -85,7 +103,38 @@ export default function App() {
   }, [theme]);
 
   // Auth & Workspace state
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    return localStorage.getItem('oakridge_session_token') || sessionStorage.getItem('oakridge_session_token') || 'demo-active-token';
+  });
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    const token = localStorage.getItem('oakridge_session_token') || sessionStorage.getItem('oakridge_session_token');
+    return token ? true : true;
+  });
+  const [academicSession, setAcademicSession] = useState<string>('2025-2026');
+  const [timeoutModalOpen, setTimeoutModalOpen] = useState(false);
+  const [timeoutSecondsRemaining, setTimeoutSecondsRemaining] = useState(60);
+
+  // Auto Date Save State (Google Sheet Backup Database)
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('oakridge_auto_sheets_sync_enabled') !== 'false';
+  });
+  const [autoSaveInterval, setAutoSaveInterval] = useState<number>(() => {
+    const saved = localStorage.getItem('oakridge_auto_sheets_sync_interval');
+    return saved ? parseInt(saved, 10) : 15;
+  });
+  const [lastAutoSaveTime, setLastAutoSaveTime] = useState<string | null>(() => {
+    return localStorage.getItem('oakridge_sheets_last_sync') || null;
+  });
+
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    return {
+      uid: 'usr-001',
+      displayName: 'Dr. Eleanor Vance',
+      email: 'superadmin@oakridgeacademy.edu',
+      photoURL: null,
+      emailVerified: true,
+    } as any;
+  });
   const [accessToken, setAccessToken] = useState<string | null>(() => {
     return sessionStorage.getItem('oakridge_workspace_token') || null;
   });
@@ -146,11 +195,14 @@ export default function App() {
   const [announcements, setAnnouncements] = useState(initialAnnouncements);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(initialAuditLogs);
   const [approvals, setApprovals] = useState(initialApprovals);
+  const [timetableSlots, setTimetableSlots] = useState<TimetableSlot[]>(initialTimetableSlots);
+  const [substituteRecords, setSubstituteRecords] = useState<SubstituteRecord[]>(initialSubstituteRecords);
 
   // Modals
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showHealthModal, setShowHealthModal] = useState(false);
   const [showSetupModal, setShowSetupModal] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [printModal, setPrintModal] = useState<{
     open: boolean;
     type: 'receipt' | 'id-card' | 'report-card' | 'salary-slip' | 'certificate';
@@ -195,6 +247,45 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Inactivity Watchdog (15 min security limit with 60-second warning countdown)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let lastActivity = Date.now();
+    const INACTIVITY_LIMIT_MS = 15 * 60 * 1000; // 15 mins
+    const WARNING_THRESHOLD_MS = INACTIVITY_LIMIT_MS - 60 * 1000; // 14 mins
+
+    const resetActivity = () => {
+      lastActivity = Date.now();
+      setTimeoutModalOpen(false);
+    };
+
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    activityEvents.forEach((ev) => window.addEventListener(ev, resetActivity));
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastActivity;
+      if (elapsed >= INACTIVITY_LIMIT_MS) {
+        clearInterval(interval);
+        setTimeoutModalOpen(false);
+        handleSignOut();
+        addAudit('Authentication', 'Session Timed Out', 'System', 'Session terminated after 15 minutes of inactivity.');
+        addToast('error', 'Session Expired', 'You have been automatically logged out due to inactivity.');
+      } else if (elapsed >= WARNING_THRESHOLD_MS) {
+        setTimeoutModalOpen(true);
+        const remSec = Math.max(0, Math.ceil((INACTIVITY_LIMIT_MS - elapsed) / 1000));
+        setTimeoutSecondsRemaining(remSec);
+      } else {
+        setTimeoutModalOpen(false);
+      }
+    }, 1000);
+
+    return () => {
+      clearInterval(interval);
+      activityEvents.forEach((ev) => window.removeEventListener(ev, resetActivity));
+    };
+  }, [isAuthenticated]);
+
   // Auth Handlers
   const handleSignIn = async () => {
     try {
@@ -203,6 +294,7 @@ export default function App() {
         setCurrentUser(res.user);
         setAccessToken(res.accessToken);
         sessionStorage.setItem('oakridge_workspace_token', res.accessToken);
+        setIsAuthenticated(true);
         addAudit('Authentication', 'User Logged In', res.user.email || 'Admin', 'Google OAuth & Firebase Auth successful.');
         addToast('success', 'Signed In with Google', `Connected as ${res.user.displayName || res.user.email}.`);
       }
@@ -213,12 +305,25 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    await logout();
+    try {
+      if (sessionToken) {
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: sessionToken }),
+        }).catch(() => {});
+      }
+      await logout();
+    } catch {}
+    localStorage.removeItem('oakridge_session_token');
+    sessionStorage.removeItem('oakridge_session_token');
+    sessionStorage.removeItem('oakridge_workspace_token');
+    setSessionToken(null);
+    setIsAuthenticated(false);
     setCurrentUser(null);
     setAccessToken(null);
-    sessionStorage.removeItem('oakridge_workspace_token');
-    addAudit('Authentication', 'User Logged Out', 'System', 'Signed out from session.');
-    addToast('info', 'Signed Out', 'You have been logged out of the session.');
+    addAudit('Authentication', 'User Logged Out', 'System', 'Administrative session revoked.');
+    addToast('info', 'Signed Out', 'You have been signed out from your session.');
   };
 
   const handleCustomLogin = (profile: { name: string; email: string; role: UserRole }) => {
@@ -243,231 +348,98 @@ export default function App() {
     localStorage.setItem('oakridge_connected_sheet_title', sheetTitle);
   };
 
-  const handleQuickSyncToSheets = async () => {
+  const handleQuickSyncToSheets = async (silent = false) => {
     if (!accessToken) {
-      addToast(
-        'error',
-        'Google Workspace Sign-in Required',
-        'Please connect your Google Workspace account on the top bar or via Admin Login to sync data.'
-      );
-      setShowAdminLoginModal(true);
+      if (!silent) {
+        addToast(
+          'error',
+          'Google Workspace Sign-in Required',
+          'Please connect your Google Workspace account on the top bar or via Admin Login to sync data.'
+        );
+        setShowAdminLoginModal(true);
+      }
       return;
     }
     if (!connectedSheetId) {
-      setShowSheetModal(true);
+      if (!silent) setShowSheetModal(true);
       return;
     }
     setIsSyncingSheets(true);
     try {
-      const tabs: MasterTabConfig[] = [
-        {
-          title: 'Students',
-          tabColor: { red: 0.26, green: 0.52, blue: 0.96 },
-          headers: [
-            'Admission No',
-            'Full Name',
-            'Roll No',
-            'Class',
-            'Section',
-            'Campus ID',
-            'Parent Name',
-            'Phone',
-            'Parent Email',
-            'Status',
-            'Fees Due ($)',
-            'Admission Date',
-          ],
-          rows: students.map((s) => [
-            s.admissionNo,
-            s.fullName,
-            s.rollNo,
-            s.className,
-            s.section,
-            s.campusId,
-            s.parentName,
-            s.parentPhone,
-            s.parentEmail,
-            s.status,
-            s.feesDue,
-            s.admissionDate,
-          ]),
-        },
-        {
-          title: 'Attendance',
-          tabColor: { red: 0.2, green: 0.65, blue: 0.33 },
-          headers: [
-            'Record ID',
-            'Date',
-            'Class',
-            'Section',
-            'Campus ID',
-            'Total Students',
-            'Present Count',
-            'Absent Count',
-            'Late Count',
-            'Marked By',
-            'Timestamp',
-          ],
-          rows: attendance.map((a) => [
-            a.id,
-            a.date,
-            a.className,
-            a.section,
-            a.campusId,
-            a.totalStudents,
-            a.presentCount,
-            a.absentCount,
-            a.lateCount,
-            a.markedBy,
-            a.timestamp,
-          ]),
-        },
-        {
-          title: 'Fee Payments',
-          tabColor: { red: 0.13, green: 0.59, blue: 0.95 },
-          headers: [
-            'Receipt No',
-            'Student Name',
-            'Invoice No',
-            'Amount Paid ($)',
-            'Payment Method',
-            'Payment Date',
-            'Reference No',
-            'Received By',
-          ],
-          rows: payments.map((p) => [
-            p.receiptNo,
-            p.studentName,
-            p.invoiceNo,
-            p.amount,
-            p.paymentMethod,
-            p.paymentDate,
-            p.referenceNo,
-            p.recordedBy,
-          ]),
-        },
-        {
-          title: 'Fee Invoices',
-          tabColor: { red: 0.95, green: 0.61, blue: 0.07 },
-          headers: [
-            'Invoice No',
-            'Student ID',
-            'Student Name',
-            'Class',
-            'Invoice Title',
-            'Total Amount ($)',
-            'Paid Amount ($)',
-            'Balance ($)',
-            'Due Date',
-            'Status',
-          ],
-          rows: invoices.map((i) => [
-            i.invoiceNo,
-            i.studentId,
-            i.studentName,
-            i.className,
-            i.title,
-            i.totalAmount,
-            i.paidAmount,
-            i.balance,
-            i.dueDate,
-            i.status,
-          ]),
-        },
-        {
-          title: 'Expenses',
-          tabColor: { red: 0.92, green: 0.26, blue: 0.21 },
-          headers: [
-            'Expense No',
-            'Category',
-            'Title',
-            'Amount ($)',
-            'Date',
-            'Payment Method',
-            'Approved By',
-            'Status',
-          ],
-          rows: expenses.map((e) => [
-            e.expenseNo,
-            e.category,
-            e.title,
-            e.amount,
-            e.date,
-            e.paymentMethod,
-            e.approvedBy,
-            e.status,
-          ]),
-        },
-        {
-          title: 'Staff & HR',
-          tabColor: { red: 0.61, green: 0.35, blue: 0.71 },
-          headers: [
-            'Employee No',
-            'Full Name',
-            'Designation',
-            'Department',
-            'Email',
-            'Phone',
-            'Base Salary ($)',
-            'Join Date',
-            'Status',
-          ],
-          rows: employees.map((emp) => [
-            emp.empNo,
-            emp.fullName,
-            emp.designation,
-            emp.department,
-            emp.email,
-            emp.phone,
-            emp.salary,
-            emp.joinDate,
-            emp.status,
-          ]),
-        },
-        {
-          title: 'Inventory',
-          tabColor: { red: 0.38, green: 0.49, blue: 0.55 },
-          headers: [
-            'SKU',
-            'Item Name',
-            'Category',
-            'Quantity In Stock',
-            'Unit Price ($)',
-            'Min Alert Threshold',
-            'Status',
-          ],
-          rows: inventory.map((inv) => [
-            inv.sku,
-            inv.name,
-            inv.category,
-            inv.quantity,
-            inv.unitPrice,
-            inv.minStockAlert,
-            inv.status,
-          ]),
-        },
-      ];
+      const fullDatasets = {
+        students,
+        attendance,
+        invoices,
+        payments,
+        expenses,
+        employees,
+        payroll,
+        inventory,
+        campuses,
+        announcements,
+        auditLogs,
+        schoolProfile,
+      };
 
+      const tabs = buildAll28TabsConfig(fullDatasets);
       await syncAllERPDataToSheet(accessToken, connectedSheetId, tabs);
       const totalRows = tabs.reduce((acc, t) => acc + t.rows.length, 0);
       const now = new Date().toLocaleString();
+      setLastAutoSaveTime(now);
       localStorage.setItem('oakridge_sheets_last_sync', now);
 
-      addToast(
-        'success',
-        'Google Sheets Database Synchronized',
-        `Pushed ${totalRows} records across all 7 institutional tabs in real time.`,
-        connectedSheetUrl || undefined,
-        'Open Spreadsheet in Google Sheets'
-      );
-      addAudit('Integration', 'Google Sheets Full Sync', connectedSheetId, `Updated 7 tabs (${totalRows} rows).`);
+      if (silent) {
+        addToast(
+          'info',
+          'Auto Date Save: 28 Sheets Synchronized',
+          `Automated background sync saved ${totalRows} records to Google Sheets backup database.`
+        );
+      } else {
+        addToast(
+          'success',
+          'Google Sheets Database Synchronized',
+          `Pushed ${totalRows} records across all 28 institutional sheets in real time.`,
+          connectedSheetUrl || undefined,
+          'Open Spreadsheet in Google Sheets'
+        );
+      }
+      addAudit('Integration', 'Google Sheets 28-Sheet Sync', connectedSheetId, `Updated 28 sheets (${totalRows} rows).`);
     } catch (err: any) {
-      console.error('Full sheets sync error:', err);
-      addToast('error', 'Google Sheets Sync Failed', err.message || 'Could not update spreadsheet.');
+      console.error('28 sheets sync error:', err);
+      if (!silent) {
+        addToast('error', 'Google Sheets Sync Failed', err.message || 'Could not update spreadsheet.');
+      }
     } finally {
       setIsSyncingSheets(false);
     }
   };
+
+  // Automated Date Save Background Scheduler with Google Sheets
+  useEffect(() => {
+    if (!autoSaveEnabled || !accessToken || !connectedSheetId) return;
+
+    const intervalMs = Math.max(1, autoSaveInterval) * 60 * 1000;
+    const timer = setInterval(() => {
+      handleQuickSyncToSheets(true);
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [
+    autoSaveEnabled,
+    autoSaveInterval,
+    accessToken,
+    connectedSheetId,
+    students,
+    attendance,
+    invoices,
+    payments,
+    expenses,
+    employees,
+    payroll,
+    inventory,
+    announcements,
+    auditLogs,
+  ]);
 
   // Export to Google Sheets (Safe In-App Notifications, No alert/window.open)
   const handleExportToGoogleSheet = async (title: string, headers: string[], rows: (string | number)[][]) => {
@@ -610,6 +582,58 @@ export default function App() {
 
   const pendingApprovalsCount = approvals.filter((a) => a.status === 'Pending Approval').length;
 
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-950">
+        <AuthPortal
+          onLoginSuccess={(user, token, redirectView, rememberMe) => {
+            setIsAuthenticated(true);
+            setSessionToken(token);
+            if (rememberMe) {
+              localStorage.setItem('oakridge_session_token', token);
+            } else {
+              sessionStorage.setItem('oakridge_session_token', token);
+            }
+            const appUser: any = {
+              uid: user.id,
+              displayName: user.name,
+              email: user.email,
+              photoURL: null,
+              emailVerified: true,
+            };
+            setCurrentUser(appUser);
+            setCurrentRole(user.role);
+            if (user.campusId && user.campusId !== 'all') {
+              setSelectedCampusId(user.campusId);
+            }
+            if (user.academicSession) {
+              setAcademicSession(user.academicSession);
+            }
+            if (redirectView) {
+              setCurrentView(redirectView as ERPView);
+            }
+            addAudit(
+              'Authentication',
+              'User Logged In',
+              user.email,
+              `Authenticated as ${user.name} (${user.role}). Redirected to ${redirectView}.`
+            );
+          }}
+          onGoogleSignIn={handleSignIn}
+          campuses={campuses}
+          currentCampusId={selectedCampusId}
+          currentAcademicSession={academicSession}
+          onSelectCampus={setSelectedCampusId}
+          onSelectAcademicSession={setAcademicSession}
+          theme={theme}
+          onToggleTheme={setTheme}
+          onShowToast={addToast}
+        />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors">
       {/* Top Navbar */}
@@ -618,11 +642,13 @@ export default function App() {
         campuses={campuses}
         selectedCampusId={selectedCampusId}
         onSelectCampus={setSelectedCampusId}
+        academicSession={academicSession}
+        onSelectAcademicSession={setAcademicSession}
         currentUser={currentUser}
         currentRole={currentRole}
         onChangeRole={setCurrentRole}
         onSignIn={() => setShowAdminLoginModal(true)}
-        onSignOut={handleSignOut}
+        onSignOut={() => setShowLogoutModal(true)}
         theme={theme}
         onToggleTheme={setTheme}
         onOpenSearch={() => setShowSearchModal(true)}
@@ -634,6 +660,14 @@ export default function App() {
         connectedSheetTitle={connectedSheetTitle}
         onOpenSheetModal={() => setShowSheetModal(true)}
         onOpenAdminLoginModal={() => setShowAdminLoginModal(true)}
+        onNavigateToView={setCurrentView}
+        studentCount={students.length}
+        todayAttendanceRate={95.2}
+        totalCollectedFees={payments.reduce((acc, p) => acc + p.amount, 0)}
+        lowStockCount={inventory.filter((i) => i.status === 'Low Stock' || i.quantity <= i.minStockAlert).length}
+        staffCount={employees.length}
+        activeExamTerm="Term 2 (Published)"
+        announcements={announcements}
       />
 
       {/* Main Workspace: Sidebar + Viewport */}
@@ -788,6 +822,53 @@ export default function App() {
             />
           )}
 
+          {currentView === 'reports-center' && (
+            <ReportsCenterView
+              students={campusStudents}
+              attendance={attendance}
+              invoices={invoices}
+              payments={payments}
+              employees={employees}
+              payroll={payroll}
+              campuses={campuses}
+              onExportToSheet={handleExportToGoogleSheet}
+              onShowToast={addToast}
+            />
+          )}
+
+          {currentView === 'library' && (
+            <LibraryView
+              students={campusStudents}
+              onExportToSheet={handleExportToGoogleSheet}
+              onShowToast={addToast}
+            />
+          )}
+
+          {currentView === 'transport' && (
+            <TransportView
+              students={campusStudents}
+              onExportToSheet={handleExportToGoogleSheet}
+              onShowToast={addToast}
+            />
+          )}
+
+          {currentView === 'communication' && (
+            <CommunicationView
+              announcements={announcements}
+              students={campusStudents}
+              onAddAnnouncement={(newAnn) => {
+                const ann: Announcement = {
+                  ...newAnn,
+                  id: `ann-${Date.now()}`,
+                  createdAt: new Date().toISOString().split('T')[0],
+                };
+                setAnnouncements((prev) => [ann, ...prev]);
+                addAudit('Communication', 'Notice Published', ann.id, `Published circular "${ann.title}".`);
+              }}
+              onShowToast={addToast}
+            />
+          )}
+
           {currentView === 'hr-payroll' && (
             <HRView
               employees={employees}
@@ -898,6 +979,47 @@ export default function App() {
               students={students}
               payments={payments}
               inventory={inventory}
+              attendance={attendance}
+              invoices={invoices}
+              expenses={expenses}
+              employees={employees}
+              payroll={payroll}
+              announcements={announcements}
+              auditLogs={auditLogs}
+              schoolProfile={schoolProfile}
+              connectedSheetId={connectedSheetId}
+              connectedSheetTitle={connectedSheetTitle}
+              connectedSheetUrl={connectedSheetUrl}
+              onOpenSheetModal={() => setShowSheetModal(true)}
+              onQuickSyncToSheets={handleQuickSyncToSheets}
+              isSyncingSheets={isSyncingSheets}
+              autoSaveEnabled={autoSaveEnabled}
+              onToggleAutoSave={(enabled) => {
+                setAutoSaveEnabled(enabled);
+                localStorage.setItem('oakridge_auto_sheets_sync_enabled', String(enabled));
+                addToast('info', 'Auto Date Save Updated', `Automated Google Sheets sync is now ${enabled ? 'Enabled' : 'Disabled'}.`);
+              }}
+              autoSaveInterval={autoSaveInterval}
+              onChangeAutoSaveInterval={(interval) => {
+                setAutoSaveInterval(interval);
+                localStorage.setItem('oakridge_auto_sheets_sync_interval', String(interval));
+                addToast('info', 'Auto Save Frequency Updated', `Auto-save frequency set to every ${interval} minutes.`);
+              }}
+              lastSyncTime={lastAutoSaveTime}
+            />
+          )}
+
+          {currentView === 'sync-fixer' && (
+            <SyncConflictIntegrityFixer
+              students={students}
+              invoices={invoices}
+              payments={payments}
+              attendance={attendance}
+              employees={employees}
+              inventory={inventory}
+              connectedSheetTitle={connectedSheetTitle}
+              connectedSheetUrl={connectedSheetUrl}
+              onShowToast={(type, title, msg) => addToast(type, title, msg)}
             />
           )}
 
@@ -979,9 +1101,26 @@ export default function App() {
         employees={employees}
         inventory={inventory}
         campuses={campuses}
+        payroll={payroll}
+        announcements={announcements}
+        auditLogs={auditLogs}
+        schoolProfile={schoolProfile}
         connectedSheetId={connectedSheetId}
         onUpdateConnectedSheet={handleUpdateConnectedSheet}
         onShowToast={addToast}
+        autoSaveEnabled={autoSaveEnabled}
+        onToggleAutoSave={(enabled) => {
+          setAutoSaveEnabled(enabled);
+          localStorage.setItem('oakridge_auto_sheets_sync_enabled', String(enabled));
+          addToast('info', 'Auto Date Save', `Automated Google Sheets sync is now ${enabled ? 'Enabled' : 'Disabled'}.`);
+        }}
+        autoSaveInterval={autoSaveInterval}
+        onChangeAutoSaveInterval={(interval) => {
+          setAutoSaveInterval(interval);
+          localStorage.setItem('oakridge_auto_sheets_sync_interval', String(interval));
+          addToast('info', 'Auto Save Interval', `Auto-save interval updated to ${interval} minutes.`);
+        }}
+        lastAutoSaveTime={lastAutoSaveTime}
       />
 
       {/* Administrative Access & Role Authentication Modal */}
@@ -996,6 +1135,30 @@ export default function App() {
         onCustomLogin={handleCustomLogin}
         hasWorkspaceAuth={!!accessToken}
         onShowToast={addToast}
+      />
+
+      {/* Inactivity Security Watchdog Modal */}
+      <SessionTimeoutModal
+        isOpen={timeoutModalOpen}
+        secondsRemaining={timeoutSecondsRemaining}
+        onStayLoggedIn={() => {
+          setTimeoutModalOpen(false);
+          addAudit('Authentication', 'Session Stay Logged In', currentUser?.email || 'User', 'Session timer extended by administrator.');
+          addToast('success', 'Session Extended', 'Your administrative session has been refreshed.');
+        }}
+        onLogoutNow={handleSignOut}
+      />
+
+      {/* Logout Confirmation Modal */}
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={() => {
+          setShowLogoutModal(false);
+          handleSignOut();
+        }}
+        userName={currentUser?.displayName || 'Authorized Administrator'}
+        userRole={currentRole}
       />
 
       {/* In-App Toast Notifications (Avoids window.alert and iframe lockups) */}

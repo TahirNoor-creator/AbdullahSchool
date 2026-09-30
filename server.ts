@@ -35,6 +35,7 @@ interface UserAccount {
   lockedUntil: number | null;
   defaultRedirect: string;
   avatarBg: string;
+  active: boolean;
 }
 
 interface UserSession {
@@ -92,6 +93,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'command-center',
     avatarBg: 'bg-indigo-600',
+    active: true,
   },
   'principal@oakridgeacademy.edu': {
     id: 'usr-002',
@@ -106,6 +108,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'analytics',
     avatarBg: 'bg-blue-600',
+    active: true,
   },
   'accountant@oakridgeacademy.edu': {
     id: 'usr-003',
@@ -120,6 +123,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'finance',
     avatarBg: 'bg-emerald-600',
+    active: true,
   },
   'hr@oakridgeacademy.edu': {
     id: 'usr-004',
@@ -134,6 +138,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'hr-payroll',
     avatarBg: 'bg-purple-600',
+    active: true,
   },
   'teacher@oakridgeacademy.edu': {
     id: 'usr-005',
@@ -148,6 +153,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'attendance',
     avatarBg: 'bg-teal-600',
+    active: true,
   },
   'security@oakridgeacademy.edu': {
     id: 'usr-006',
@@ -162,6 +168,7 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'qr-scanner',
     avatarBg: 'bg-amber-600',
+    active: true,
   },
   'pos@oakridgeacademy.edu': {
     id: 'usr-007',
@@ -176,6 +183,37 @@ const userAccounts: Record<string, UserAccount> = {
     lockedUntil: null,
     defaultRedirect: 'inventory-pos',
     avatarBg: 'bg-sky-600',
+    active: true,
+  },
+  'student@oakridgeacademy.edu': {
+    id: 'usr-008',
+    email: 'student@oakridgeacademy.edu',
+    username: 'student',
+    name: 'Alexander Hayes',
+    role: 'Student',
+    designation: 'Student Council President (Grade 10-A)',
+    passwordHash: defaultCredential.hash,
+    salt: defaultCredential.salt,
+    failedAttempts: 0,
+    lockedUntil: null,
+    defaultRedirect: 'students',
+    avatarBg: 'bg-emerald-600',
+    active: true,
+  },
+  'parent@oakridgeacademy.edu': {
+    id: 'usr-009',
+    email: 'parent@oakridgeacademy.edu',
+    username: 'parent',
+    name: 'Robert & Clara Hayes',
+    role: 'Parent',
+    designation: 'Guardian of Alexander Hayes',
+    passwordHash: defaultCredential.hash,
+    salt: defaultCredential.salt,
+    failedAttempts: 0,
+    lockedUntil: null,
+    defaultRedirect: 'students',
+    avatarBg: 'bg-cyan-600',
+    active: true,
   },
 };
 
@@ -235,6 +273,14 @@ app.post('/api/auth/login', (req, res) => {
       logSecurityEvent('LOGIN_FAILED', trimmedInput, clientIp, 'Authentication failed: Account not found.', 'medium');
       return res.status(401).json({
         error: 'Invalid credentials. Please verify your institutional email or username.',
+      });
+    }
+
+    // Check account active state
+    if (userEntry.active === false) {
+      logSecurityEvent('LOGIN_FAILED', userEntry.email, clientIp, 'Attempted sign-in to deactivated account.', 'high');
+      return res.status(403).json({
+        error: 'This account has been deactivated by the system administrator. Please contact IT support.',
       });
     }
 
@@ -544,6 +590,409 @@ app.post('/api/auth/unlock-account', (req, res) => {
 // 7. Security Events Log
 app.get('/api/auth/security-events', (_req, res) => {
   return res.json({ events: securityEvents });
+});
+
+// 8. Change Password (Authenticated User)
+app.post('/api/auth/change-password', (req, res) => {
+  try {
+    const { email, currentPassword, newPassword } = req.body;
+    const clientIp = req.ip || '127.0.0.1';
+
+    if (!email || !currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Email, current password, and new password are required.' });
+    }
+
+    const user = Object.values(userAccounts).find((u) => u.email.toLowerCase() === String(email).trim().toLowerCase());
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    const isCurrentValid = verifyPassword(currentPassword, user.salt, user.passwordHash);
+    if (!isCurrentValid) {
+      logSecurityEvent('LOGIN_FAILED', user.email, clientIp, 'Password change rejected: Incorrect current password.', 'medium');
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    const { hash, salt } = hashPassword(newPassword);
+    user.passwordHash = hash;
+    user.salt = salt;
+
+    logSecurityEvent('PASSWORD_RESET', user.email, clientIp, 'Password changed by authenticated user.', 'medium');
+
+    return res.json({ success: true, message: 'Password has been updated successfully.' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to update password.' });
+  }
+});
+
+// 9. Get User Accounts (For RBAC & Account Management)
+app.get('/api/auth/users', (_req, res) => {
+  const usersList = Object.values(userAccounts).map((u) => ({
+    id: u.id,
+    email: u.email,
+    username: u.username,
+    name: u.name,
+    role: u.role,
+    designation: u.designation,
+    failedAttempts: u.failedAttempts,
+    isLocked: !!(u.lockedUntil && u.lockedUntil > Date.now()),
+    active: u.active !== false,
+    avatarBg: u.avatarBg,
+  }));
+  return res.json({ users: usersList });
+});
+
+// 10. Toggle User Status (Activate/Deactivate)
+app.post('/api/auth/toggle-user-status', (req, res) => {
+  try {
+    const { email, active } = req.body;
+    const clientIp = req.ip || '127.0.0.1';
+
+    const user = Object.values(userAccounts).find((u) => u.email.toLowerCase() === String(email).trim().toLowerCase());
+    if (!user) {
+      return res.status(404).json({ error: 'User account not found.' });
+    }
+
+    user.active = Boolean(active);
+    logSecurityEvent(
+      'ACCOUNT_UNLOCKED',
+      user.email,
+      clientIp,
+      `User account ${active ? 'activated' : 'deactivated'} by administrator.`,
+      'high'
+    );
+
+    return res.json({
+      success: true,
+      message: `Account for ${user.name} is now ${user.active ? 'Active' : 'Deactivated'}.`,
+      user: {
+        id: user.id,
+        email: user.email,
+        active: user.active,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to toggle account status.' });
+  }
+});
+
+// 11. Controlled Transaction Approval Workflows (Server-Enforced Financial Controls)
+interface ServerApprovalAudit {
+  action: 'Created' | 'Submitted' | 'Approved' | 'Rejected' | 'Posted' | 'Cancelled';
+  actor: string;
+  role: string;
+  timestamp: string;
+  notes?: string;
+  reason?: string;
+}
+
+interface ServerApproval {
+  id: string;
+  title: string;
+  type: string;
+  requesterName: string;
+  requesterRole: string;
+  amount?: number;
+  details: string;
+  status: 'Draft' | 'Submitted' | 'Pending Approval' | 'Approved' | 'Posted' | 'Rejected' | 'Cancelled';
+  submittedDate: string;
+  studentId?: string;
+  studentName?: string;
+  createdBy: string;
+  createdRole: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  postedBy?: string;
+  postedAt?: string;
+  rejectionReason?: string;
+  cancellationReason?: string;
+  comments?: string;
+  auditTrail: ServerApprovalAudit[];
+}
+
+const serverApprovals: ServerApproval[] = [
+  {
+    id: 'TXN-APP-001',
+    title: 'Merit Tuition Scholarship (25% Discount)',
+    type: 'Fee Discount',
+    requesterName: 'Officer Thomas Jackson',
+    requesterRole: 'Receptionist',
+    amount: 875,
+    details: 'Merit scholarship application for incoming transfer student in Grade 11 Science.',
+    status: 'Pending Approval',
+    submittedDate: '2026-09-23',
+    studentId: 'stu-101',
+    studentName: 'Alexander Hayes',
+    createdBy: 'Officer Thomas Jackson',
+    createdRole: 'Receptionist',
+    submittedBy: 'Jonathan Reynolds, CPA',
+    submittedAt: '2026-09-23 10:15 AM',
+    auditTrail: [
+      { action: 'Created', actor: 'Officer Thomas Jackson', role: 'Receptionist', timestamp: '2026-09-23 09:30 AM', notes: 'Initial scholarship voucher created.' },
+      { action: 'Submitted', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-23 10:15 AM', notes: 'Forwarded for principal approval.' },
+    ],
+  },
+  {
+    id: 'TXN-APP-002',
+    title: 'Robotics Team Championship Travel Expense',
+    type: 'Expense',
+    requesterName: 'Clara Oswald, M.Ed.',
+    requesterRole: 'Teacher',
+    amount: 4600,
+    details: 'Travel, lodging, and registration fees for 8 students and 2 faculty chaperones.',
+    status: 'Pending Approval',
+    submittedDate: '2026-09-24',
+    createdBy: 'Clara Oswald, M.Ed.',
+    createdRole: 'Teacher',
+    submittedBy: 'Jonathan Reynolds, CPA',
+    submittedAt: '2026-09-24 11:00 AM',
+    auditTrail: [
+      { action: 'Created', actor: 'Clara Oswald, M.Ed.', role: 'Teacher', timestamp: '2026-09-24 09:00 AM' },
+      { action: 'Submitted', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-24 11:00 AM' },
+    ],
+  },
+  {
+    id: 'TXN-APP-003',
+    title: 'Faculty September Payroll Batch Disbursement',
+    type: 'Payroll',
+    requesterName: 'Jonathan Reynolds, CPA',
+    requesterRole: 'Accountant',
+    amount: 102000,
+    details: 'Disbursement authorization for monthly faculty and operational staff payroll register.',
+    status: 'Approved',
+    submittedDate: '2026-09-25',
+    createdBy: 'Jonathan Reynolds, CPA',
+    createdRole: 'Accountant',
+    submittedBy: 'Jonathan Reynolds, CPA',
+    submittedAt: '2026-09-25 08:30 AM',
+    approvedBy: 'Dr. Eleanor Vance',
+    approvedAt: '2026-09-25 02:15 PM',
+    comments: 'Reviewed and verified with bank treasury.',
+    auditTrail: [
+      { action: 'Created', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-24 05:00 PM' },
+      { action: 'Submitted', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-25 08:30 AM' },
+      { action: 'Approved', actor: 'Dr. Eleanor Vance', role: 'Super Admin', timestamp: '2026-09-25 02:15 PM' },
+    ],
+  },
+  {
+    id: 'TXN-APP-004',
+    title: 'Quarter 2 Tuition Overpayment Refund',
+    type: 'Fee Refund',
+    requesterName: 'Jonathan Reynolds, CPA',
+    requesterRole: 'Accountant',
+    amount: 450,
+    details: 'Parent Clara Sterling overpaid semester lab fees; balance adjustment requested.',
+    status: 'Posted',
+    submittedDate: '2026-09-20',
+    studentId: 'stu-103',
+    studentName: 'Julian Sterling',
+    createdBy: 'Jonathan Reynolds, CPA',
+    createdRole: 'Accountant',
+    submittedBy: 'Jonathan Reynolds, CPA',
+    submittedAt: '2026-09-20 09:00 AM',
+    approvedBy: 'Prof. Margaret Sterling',
+    approvedAt: '2026-09-20 11:30 AM',
+    postedBy: 'System Financial Engine',
+    postedAt: '2026-09-20 12:00 PM',
+    auditTrail: [
+      { action: 'Created', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-20 08:45 AM' },
+      { action: 'Submitted', actor: 'Jonathan Reynolds, CPA', role: 'Accountant', timestamp: '2026-09-20 09:00 AM' },
+      { action: 'Approved', actor: 'Prof. Margaret Sterling', role: 'Principal', timestamp: '2026-09-20 11:30 AM' },
+      { action: 'Posted', actor: 'System Financial Engine', role: 'System', timestamp: '2026-09-20 12:00 PM', notes: 'Cheque issued; ledger locked.' },
+    ],
+  },
+];
+
+// Get all approvals
+app.get('/api/approvals', (_req, res) => {
+  return res.json({ approvals: serverApprovals });
+});
+
+// Create new transaction approval request
+app.post('/api/approvals/create', (req, res) => {
+  try {
+    const { title, type, requesterName, requesterRole, amount, details, studentId, studentName, status = 'Submitted' } = req.body;
+    if (!title || !type) {
+      return res.status(400).json({ error: 'Title and type are required' });
+    }
+    const id = `TXN-APP-${String(serverApprovals.length + 1).padStart(3, '0')}`;
+    const timestamp = new Date().toLocaleString();
+    const newTxn: ServerApproval = {
+      id,
+      title,
+      type,
+      requesterName: requesterName || 'Staff Member',
+      requesterRole: requesterRole || 'Staff',
+      amount: amount ? Number(amount) : undefined,
+      details: details || '',
+      studentId,
+      studentName,
+      status: status === 'Draft' ? 'Draft' : 'Pending Approval',
+      submittedDate: new Date().toISOString().split('T')[0],
+      createdBy: requesterName || 'Staff Member',
+      createdRole: requesterRole || 'Staff',
+      auditTrail: [
+        {
+          action: 'Created',
+          actor: requesterName || 'Staff Member',
+          role: requesterRole || 'Staff',
+          timestamp,
+          notes: status === 'Draft' ? 'Created as draft' : 'Submitted for review',
+        },
+      ],
+    };
+    if (status !== 'Draft') {
+      newTxn.submittedBy = requesterName;
+      newTxn.submittedAt = timestamp;
+      newTxn.auditTrail.push({
+        action: 'Submitted',
+        actor: requesterName || 'Staff Member',
+        role: requesterRole || 'Staff',
+        timestamp,
+        notes: 'Forwarded for executive approval',
+      });
+    }
+    serverApprovals.unshift(newTxn);
+    return res.json({ success: true, transaction: newTxn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to create transaction' });
+  }
+});
+
+// Submit a Draft transaction for approval
+app.post('/api/approvals/submit', (req, res) => {
+  try {
+    const { id, actorName, actorRole } = req.body;
+    const txn = serverApprovals.find((t) => t.id === id);
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+    if (txn.status !== 'Draft') {
+      return res.status(400).json({ error: 'Only Draft transactions can be submitted' });
+    }
+    const timestamp = new Date().toLocaleString();
+    txn.status = 'Pending Approval';
+    txn.submittedBy = actorName || 'Accountant';
+    txn.submittedAt = timestamp;
+    txn.auditTrail.push({
+      action: 'Submitted',
+      actor: actorName || 'Accountant',
+      role: actorRole || 'Accountant',
+      timestamp,
+      notes: 'Submitted for managerial authorization',
+    });
+    return res.json({ success: true, transaction: txn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to submit transaction' });
+  }
+});
+
+// Approve transaction (Requires Principal / Super Admin / Authorized Manager)
+app.post('/api/approvals/approve', (req, res) => {
+  try {
+    const { id, approverName, approverRole, comments } = req.body;
+    const txn = serverApprovals.find((t) => t.id === id);
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+    if (txn.status !== 'Pending Approval') {
+      return res.status(400).json({ error: 'Only Pending transactions can be approved' });
+    }
+    const timestamp = new Date().toLocaleString();
+    txn.status = 'Approved';
+    txn.approvedBy = approverName || 'Dr. Eleanor Vance';
+    txn.approvedAt = timestamp;
+    if (comments) txn.comments = comments;
+    txn.auditTrail.push({
+      action: 'Approved',
+      actor: approverName || 'Dr. Eleanor Vance',
+      role: approverRole || 'Super Admin',
+      timestamp,
+      notes: comments || 'Authorized for financial posting',
+    });
+    return res.json({ success: true, transaction: txn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to approve transaction' });
+  }
+});
+
+// Reject transaction (Requires reason)
+app.post('/api/approvals/reject', (req, res) => {
+  try {
+    const { id, rejectorName, rejectorRole, reason } = req.body;
+    const txn = serverApprovals.find((t) => t.id === id);
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+    if (txn.status !== 'Pending Approval') {
+      return res.status(400).json({ error: 'Only Pending transactions can be rejected' });
+    }
+    if (!reason) {
+      return res.status(400).json({ error: 'Rejection reason is required by financial control policy' });
+    }
+    const timestamp = new Date().toLocaleString();
+    txn.status = 'Rejected';
+    txn.rejectionReason = reason;
+    txn.auditTrail.push({
+      action: 'Rejected',
+      actor: rejectorName || 'Dr. Eleanor Vance',
+      role: rejectorRole || 'Super Admin',
+      timestamp,
+      reason,
+      notes: `Rejected by executive authorization: ${reason}`,
+    });
+    return res.json({ success: true, transaction: txn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to reject transaction' });
+  }
+});
+
+// Post transaction (Locks transaction, enters into official general ledger)
+app.post('/api/approvals/post', (req, res) => {
+  try {
+    const { id, posterName, posterRole } = req.body;
+    const txn = serverApprovals.find((t) => t.id === id);
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+    if (txn.status !== 'Approved') {
+      return res.status(400).json({ error: 'Transaction must be Approved before posting' });
+    }
+    const timestamp = new Date().toLocaleString();
+    txn.status = 'Posted';
+    txn.postedBy = posterName || 'System Financial Engine';
+    txn.postedAt = timestamp;
+    txn.auditTrail.push({
+      action: 'Posted',
+      actor: posterName || 'System Financial Engine',
+      role: posterRole || 'System',
+      timestamp,
+      notes: 'Transaction ledger entries posted and locked permanently',
+    });
+    return res.json({ success: true, transaction: txn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to post transaction' });
+  }
+});
+
+// Cancel transaction (Requires cancellation reason)
+app.post('/api/approvals/cancel', (req, res) => {
+  try {
+    const { id, cancelerName, cancelerRole, reason } = req.body;
+    const txn = serverApprovals.find((t) => t.id === id);
+    if (!txn) return res.status(404).json({ error: 'Transaction not found' });
+    if (txn.status === 'Posted') {
+      return res.status(400).json({ error: 'Posted transactions cannot be freely cancelled. Use official reverse procedure.' });
+    }
+    const timestamp = new Date().toLocaleString();
+    txn.status = 'Cancelled';
+    txn.cancellationReason = reason || 'Cancelled by authorized user';
+    txn.auditTrail.push({
+      action: 'Cancelled',
+      actor: cancelerName || 'Staff Member',
+      role: cancelerRole || 'Staff',
+      timestamp,
+      reason: reason || 'Cancelled by authorized user',
+      notes: reason || 'Cancelled by authorized user',
+    });
+    return res.json({ success: true, transaction: txn });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to cancel transaction' });
+  }
 });
 
 // Shared Gemini client utility

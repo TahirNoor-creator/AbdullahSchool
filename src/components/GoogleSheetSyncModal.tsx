@@ -14,13 +14,27 @@ import {
   X,
   Sparkles,
   Download,
+  Upload,
+  Clock,
+  ShieldCheck,
+  Search,
+  Filter,
+  CheckSquare,
+  Square,
+  Zap,
 } from 'lucide-react';
 import {
   createMultiTabMasterSpreadsheet,
   syncAllERPDataToSheet,
   getSpreadsheetInfo,
+  readAllERPDataFromSheet,
   MasterTabConfig,
 } from '../services/workspace';
+import {
+  ALL_28_SHEET_TABS,
+  FullERPBackupDatasets,
+  buildAll28TabsConfig,
+} from '../services/sheetsMasterBackup';
 import {
   Student,
   AttendanceRecord,
@@ -30,6 +44,10 @@ import {
   Employee,
   InventoryItem,
   Campus,
+  PayrollRecord,
+  Announcement,
+  AuditLog,
+  SchoolProfile,
 } from '../types/erp';
 
 interface GoogleSheetSyncModalProps {
@@ -45,9 +63,18 @@ interface GoogleSheetSyncModalProps {
   employees: Employee[];
   inventory: InventoryItem[];
   campuses: Campus[];
+  payroll?: PayrollRecord[];
+  announcements?: Announcement[];
+  auditLogs?: AuditLog[];
+  schoolProfile?: SchoolProfile;
   connectedSheetId: string | null;
   onUpdateConnectedSheet: (sheetId: string, sheetUrl: string, sheetTitle: string) => void;
   onShowToast: (type: 'success' | 'error' | 'info', title: string, message: string, url?: string) => void;
+  autoSaveEnabled?: boolean;
+  onToggleAutoSave?: (enabled: boolean) => void;
+  autoSaveInterval?: number;
+  onChangeAutoSaveInterval?: (intervalMinutes: number) => void;
+  lastAutoSaveTime?: string | null;
 }
 
 export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
@@ -63,14 +90,25 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
   employees,
   inventory,
   campuses,
+  payroll,
+  announcements,
+  auditLogs,
+  schoolProfile,
   connectedSheetId,
   onUpdateConnectedSheet,
   onShowToast,
+  autoSaveEnabled = true,
+  onToggleAutoSave,
+  autoSaveInterval = 15,
+  onChangeAutoSaveInterval,
+  lastAutoSaveTime,
 }) => {
-  const [activeTab, setActiveTab] = useState<'sync' | 'connect' | 'history'>('sync');
+  const [activeTab, setActiveTab] = useState<'sync' | 'connect' | 'autosave' | 'history'>('sync');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [sheetInput, setSheetInput] = useState('');
-  const [sheetTitle, setSheetTitle] = useState('Oakridge Academy - Central ERP Database (2026-2027)');
+  const [sheetTitle, setSheetTitle] = useState('Oakridge Academy - Central Master Database (28 Sheets)');
+  const [searchFilter, setSearchFilter] = useState('');
   const [connectedSheetInfo, setConnectedSheetInfo] = useState<{
     id: string;
     title: string;
@@ -79,15 +117,13 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
     lastSynced?: string;
   } | null>(null);
 
-  // Dataset selection toggles
-  const [syncSelections, setSyncSelections] = useState({
-    students: true,
-    attendance: true,
-    payments: true,
-    invoices: true,
-    expenses: true,
-    employees: true,
-    inventory: true,
+  // Selected tabs state (all 28 enabled by default)
+  const [selectedTabs, setSelectedTabs] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    ALL_28_SHEET_TABS.forEach((t) => {
+      initial[t.id] = true;
+    });
+    return initial;
   });
 
   // Local sync history log
@@ -108,6 +144,21 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
       return [];
     }
   });
+
+  const fullDatasets: FullERPBackupDatasets = {
+    students,
+    attendance,
+    invoices,
+    payments,
+    expenses,
+    employees,
+    payroll,
+    inventory,
+    campuses,
+    announcements,
+    auditLogs,
+    schoolProfile,
+  };
 
   // Load connected sheet info if sheetId exists
   useEffect(() => {
@@ -130,381 +181,230 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Helper to compile tabs data
-  const buildTabsData = (): MasterTabConfig[] => {
-    const tabs: MasterTabConfig[] = [];
-
-    if (syncSelections.students) {
-      tabs.push({
-        title: 'Students',
-        tabColor: { red: 0.26, green: 0.52, blue: 0.96 },
-        headers: [
-          'Admission No',
-          'Full Name',
-          'Roll No',
-          'Class',
-          'Section',
-          'Campus ID',
-          'Parent Name',
-          'Phone',
-          'Parent Email',
-          'Status',
-          'Fees Due ($)',
-          'Admission Date',
-        ],
-        rows: students.map((s) => [
-          s.admissionNo,
-          s.fullName,
-          s.rollNo,
-          s.className,
-          s.section,
-          s.campusId,
-          s.parentName,
-          s.parentPhone,
-          s.parentEmail,
-          s.status,
-          s.feesDue,
-          s.admissionDate,
-        ]),
-      });
-    }
-
-    if (syncSelections.attendance) {
-      tabs.push({
-        title: 'Attendance',
-        tabColor: { red: 0.2, green: 0.65, blue: 0.33 },
-        headers: [
-          'Record ID',
-          'Date',
-          'Class',
-          'Section',
-          'Campus ID',
-          'Total Students',
-          'Present Count',
-          'Absent Count',
-          'Late Count',
-          'Marked By',
-          'Timestamp',
-        ],
-        rows: attendance.map((a) => [
-          a.id,
-          a.date,
-          a.className,
-          a.section,
-          a.campusId,
-          a.totalStudents,
-          a.presentCount,
-          a.absentCount,
-          a.lateCount,
-          a.markedBy,
-          a.timestamp,
-        ]),
-      });
-    }
-
-    if (syncSelections.payments) {
-      tabs.push({
-        title: 'Fee Payments',
-        tabColor: { red: 0.13, green: 0.59, blue: 0.95 },
-        headers: [
-          'Receipt No',
-          'Student Name',
-          'Invoice No',
-          'Amount Paid ($)',
-          'Payment Method',
-          'Payment Date',
-          'Reference No',
-          'Received By',
-          'Notes',
-        ],
-        rows: payments.map((p) => [
-          p.receiptNo,
-          p.studentName,
-          p.invoiceNo,
-          p.amount,
-          p.paymentMethod,
-          p.paymentDate,
-          p.referenceNo,
-          p.recordedBy,
-          p.notes || 'N/A',
-        ]),
-      });
-    }
-
-    if (syncSelections.invoices) {
-      tabs.push({
-        title: 'Fee Invoices',
-        tabColor: { red: 0.95, green: 0.61, blue: 0.07 },
-        headers: [
-          'Invoice No',
-          'Student ID',
-          'Student Name',
-          'Class',
-          'Invoice Title',
-          'Total Amount ($)',
-          'Paid Amount ($)',
-          'Balance ($)',
-          'Due Date',
-          'Status',
-        ],
-        rows: invoices.map((i) => [
-          i.invoiceNo,
-          i.studentId,
-          i.studentName,
-          i.className,
-          i.title,
-          i.totalAmount,
-          i.paidAmount,
-          i.balance,
-          i.dueDate,
-          i.status,
-        ]),
-      });
-    }
-
-    if (syncSelections.expenses) {
-      tabs.push({
-        title: 'Expenses',
-        tabColor: { red: 0.92, green: 0.26, blue: 0.21 },
-        headers: [
-          'Expense No',
-          'Category',
-          'Title',
-          'Amount ($)',
-          'Date',
-          'Payment Method',
-          'Approved By',
-          'Status',
-        ],
-        rows: expenses.map((e) => [
-          e.expenseNo,
-          e.category,
-          e.title,
-          e.amount,
-          e.date,
-          e.paymentMethod,
-          e.approvedBy,
-          e.status,
-        ]),
-      });
-    }
-
-    if (syncSelections.employees) {
-      tabs.push({
-        title: 'Staff Directory',
-        tabColor: { red: 0.61, green: 0.35, blue: 0.71 },
-        headers: [
-          'Employee No',
-          'Full Name',
-          'Designation',
-          'Department',
-          'Email',
-          'Phone',
-          'Base Salary ($)',
-          'Join Date',
-          'Status',
-        ],
-        rows: employees.map((emp) => [
-          emp.empNo,
-          emp.fullName,
-          emp.designation,
-          emp.department,
-          emp.email,
-          emp.phone,
-          emp.salary,
-          emp.joinDate,
-          emp.status,
-        ]),
-      });
-    }
-
-    if (syncSelections.inventory) {
-      tabs.push({
-        title: 'Inventory',
-        tabColor: { red: 0.38, green: 0.49, blue: 0.55 },
-        headers: [
-          'SKU',
-          'Item Name',
-          'Category',
-          'Quantity In Stock',
-          'Unit Price ($)',
-          'Min Alert Threshold',
-          'Status',
-        ],
-        rows: inventory.map((inv) => [
-          inv.sku,
-          inv.name,
-          inv.category,
-          inv.quantity,
-          inv.unitPrice,
-          inv.minStockAlert,
-          inv.status,
-        ]),
-      });
-    }
-
-    return tabs;
+  const toggleAll = (select: boolean) => {
+    const updated: Record<string, boolean> = {};
+    ALL_28_SHEET_TABS.forEach((t) => {
+      updated[t.id] = select;
+    });
+    setSelectedTabs(updated);
   };
 
-  // Create new Master Spreadsheet with multi-tabs
-  const handleCreateMasterSheet = async () => {
+  const selectedCount = Object.values(selectedTabs).filter(Boolean).length;
+  const totalRecordsToSync = ALL_28_SHEET_TABS.filter((t) => selectedTabs[t.id]).reduce(
+    (acc, t) => acc + t.recordCount(fullDatasets),
+    0
+  );
+
+  const filteredTabs = ALL_28_SHEET_TABS.filter(
+    (t) =>
+      t.name.toLowerCase().includes(searchFilter.toLowerCase()) ||
+      t.purpose.toLowerCase().includes(searchFilter.toLowerCase())
+  );
+
+  // 1. Create New 28-Sheet Master Spreadsheet & Sync
+  const handleCreateAndSyncMaster = async () => {
     if (!accessToken) {
-      onShowToast('error', 'Authentication Required', 'Please connect your Google Workspace account first.');
+      onShowToast('error', 'Google Workspace Sign-in Required', 'Please authenticate with your Google account.');
+      onAuthenticate();
+      return;
+    }
+
+    const activeTabIds = Object.keys(selectedTabs).filter((id) => selectedTabs[id]);
+    if (activeTabIds.length === 0) {
+      onShowToast('error', 'No Sheets Selected', 'Please select at least one sheet tab to export.');
       return;
     }
 
     setIsProcessing(true);
     try {
-      const tabs = buildTabsData();
-      const res = await createMultiTabMasterSpreadsheet(accessToken, sheetTitle, tabs);
+      const tabsPayload = buildAll28TabsConfig(fullDatasets, activeTabIds);
+      const result = await createMultiTabMasterSpreadsheet(accessToken, sheetTitle, tabsPayload);
 
-      const now = new Date().toLocaleString();
+      onUpdateConnectedSheet(result.spreadsheetId, result.spreadsheetUrl, sheetTitle);
       setConnectedSheetInfo({
-        id: res.spreadsheetId,
+        id: result.spreadsheetId,
         title: sheetTitle,
-        url: res.spreadsheetUrl,
-        sheets: tabs.map((t) => t.title),
-        lastSynced: now,
+        url: result.spreadsheetUrl,
+        sheets: tabsPayload.map((t) => t.title),
+        lastSynced: new Date().toLocaleString(),
       });
 
-      localStorage.setItem('oakridge_sheets_last_sync', now);
-      onUpdateConnectedSheet(res.spreadsheetId, res.spreadsheetUrl, sheetTitle);
-
-      const totalRows = tabs.reduce((acc, t) => acc + t.rows.length, 0);
-      const newEntry = {
+      const totalRows = tabsPayload.reduce((acc, t) => acc + t.rows.length, 0);
+      const newHistoryItem = {
         id: `sync-${Date.now()}`,
-        timestamp: now,
+        timestamp: new Date().toLocaleString(),
         recordsCount: totalRows,
-        tabsUpdated: tabs.map((t) => t.title),
+        tabsUpdated: tabsPayload.map((t) => t.title),
         status: 'success' as const,
-        message: `Created master Google Sheet with ${tabs.length} tabs and synced ${totalRows} institutional records.`,
+        message: `Created central database with ${tabsPayload.length} sheet tabs and ${totalRows} institutional records.`,
       };
-      const updatedHistory = [newEntry, ...syncHistory];
+      const updatedHistory = [newHistoryItem, ...syncHistory].slice(0, 15);
       setSyncHistory(updatedHistory);
       localStorage.setItem('oakridge_sheets_sync_history', JSON.stringify(updatedHistory));
+      localStorage.setItem('oakridge_sheets_last_sync', new Date().toLocaleString());
 
       onShowToast(
         'success',
-        'Google Sheet Database Created!',
-        `Successfully initialized master spreadsheet with ${tabs.length} tabs (${totalRows} records stored).`,
-        res.spreadsheetUrl
+        '28-Sheet Master Database Created & Synced!',
+        `Created "${sheetTitle}" with ${tabsPayload.length} tabs and ${totalRows} rows.`,
+        result.spreadsheetUrl
       );
     } catch (err: any) {
-      console.error('Error creating Google Sheet:', err);
-      onShowToast('error', 'Google Sheet Creation Failed', err.message || 'Error communicating with Google Sheets API');
+      console.error('Master sheet creation error:', err);
+      onShowToast('error', 'Spreadsheet Creation Failed', err.message || 'Error communicating with Google Sheets API.');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Sync to existing connected sheet
-  const handleSyncToCurrentSheet = async () => {
-    if (!accessToken) {
-      onShowToast('error', 'Authentication Required', 'Please connect your Google Workspace account.');
+  // 2. Sync to Existing Connected Spreadsheet
+  const handleSyncToConnectedSheet = async () => {
+    if (!accessToken || !connectedSheetId) {
+      onShowToast('error', 'No Connected Sheet', 'Please connect or create a Google Spreadsheet first.');
       return;
     }
-    if (!connectedSheetInfo?.id) {
-      onShowToast('error', 'No Connected Sheet', 'Please create or connect a Google Sheet first.');
+
+    const activeTabIds = Object.keys(selectedTabs).filter((id) => selectedTabs[id]);
+    if (activeTabIds.length === 0) {
+      onShowToast('error', 'No Sheets Selected', 'Please select at least one sheet tab.');
       return;
     }
 
     setIsProcessing(true);
     try {
-      const tabs = buildTabsData();
-      await syncAllERPDataToSheet(accessToken, connectedSheetInfo.id, tabs);
+      const tabsPayload = buildAll28TabsConfig(fullDatasets, activeTabIds);
+      await syncAllERPDataToSheet(accessToken, connectedSheetId, tabsPayload);
 
-      const now = new Date().toLocaleString();
-      setConnectedSheetInfo((prev) => (prev ? { ...prev, lastSynced: now } : prev));
-      localStorage.setItem('oakridge_sheets_last_sync', now);
+      const totalRows = tabsPayload.reduce((acc, t) => acc + t.rows.length, 0);
+      const nowStr = new Date().toLocaleString();
 
-      const totalRows = tabs.reduce((acc, t) => acc + t.rows.length, 0);
-      const newEntry = {
+      setConnectedSheetInfo((prev) => (prev ? { ...prev, lastSynced: nowStr } : null));
+
+      const newHistoryItem = {
         id: `sync-${Date.now()}`,
-        timestamp: now,
+        timestamp: nowStr,
         recordsCount: totalRows,
-        tabsUpdated: tabs.map((t) => t.title),
+        tabsUpdated: tabsPayload.map((t) => t.title),
         status: 'success' as const,
-        message: `Updated ${tabs.length} tabs with ${totalRows} rows in Google Sheets.`,
+        message: `Synchronized ${tabsPayload.length} tabs with ${totalRows} live records.`,
       };
-      const updatedHistory = [newEntry, ...syncHistory];
+      const updatedHistory = [newHistoryItem, ...syncHistory].slice(0, 15);
       setSyncHistory(updatedHistory);
       localStorage.setItem('oakridge_sheets_sync_history', JSON.stringify(updatedHistory));
+      localStorage.setItem('oakridge_sheets_last_sync', nowStr);
 
       onShowToast(
         'success',
-        'Google Sheet Synchronized!',
-        `Successfully pushed ${totalRows} live records across ${tabs.length} tabs.`,
-        connectedSheetInfo.url
+        'Google Sheets Database Synchronized',
+        `Pushed ${totalRows} records across ${tabsPayload.length} sheet tabs to Google Sheets.`,
+        connectedSheetInfo?.url
       );
     } catch (err: any) {
-      console.error('Error syncing to Google Sheet:', err);
-      onShowToast('error', 'Google Sheet Sync Error', err.message || 'Failed to update Google Sheet values.');
+      console.error('Sheet sync error:', err);
+      onShowToast('error', 'Spreadsheet Sync Failed', err.message || 'Could not push data to Google Sheets.');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  // Connect via existing Sheet ID or URL
-  const handleConnectExistingSheet = async () => {
+  // 3. Connect Existing Sheet by ID or URL
+  const handleConnectExisting = async () => {
     if (!accessToken) {
-      onShowToast('error', 'Authentication Required', 'Please connect your Google Workspace account first.');
-      return;
-    }
-    if (!sheetInput.trim()) {
-      onShowToast('error', 'Invalid Input', 'Please paste a Google Spreadsheet ID or URL.');
+      onShowToast('error', 'Sign-in Required', 'Please authenticate with Google Workspace first.');
+      onAuthenticate();
       return;
     }
 
-    // Extract sheet ID from standard google sheet URL if pasted
-    let cleanId = sheetInput.trim();
-    const urlMatch = cleanId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    let parsedId = sheetInput.trim();
+    const urlMatch = parsedId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
     if (urlMatch && urlMatch[1]) {
-      cleanId = urlMatch[1];
+      parsedId = urlMatch[1];
+    }
+
+    if (!parsedId || parsedId.length < 15) {
+      onShowToast('error', 'Invalid Sheet Reference', 'Please enter a valid Google Spreadsheet URL or Sheet ID.');
+      return;
     }
 
     setIsProcessing(true);
     try {
-      const info = await getSpreadsheetInfo(accessToken, cleanId);
-      const now = new Date().toLocaleString();
+      const info = await getSpreadsheetInfo(accessToken, parsedId);
+      onUpdateConnectedSheet(parsedId, info.spreadsheetUrl, info.title);
       setConnectedSheetInfo({
-        id: cleanId,
+        id: parsedId,
         title: info.title,
         url: info.spreadsheetUrl,
         sheets: info.sheets,
-        lastSynced: now,
+        lastSynced: localStorage.getItem('oakridge_sheets_last_sync') || undefined,
       });
 
-      onUpdateConnectedSheet(cleanId, info.spreadsheetUrl, info.title);
-      onShowToast('success', 'Connected to Google Sheet!', `Successfully linked "${info.title}" (${info.sheets.length} sheets found).`);
+      onShowToast(
+        'success',
+        'Google Sheet Linked as Central Database',
+        `Connected to "${info.title}" (${info.sheets.length} existing tabs detected).`,
+        info.spreadsheetUrl
+      );
       setActiveTab('sync');
     } catch (err: any) {
-      console.error('Error connecting to sheet:', err);
-      onShowToast('error', 'Connection Failed', `Could not access spreadsheet (${err.message}). Check permissions.`);
+      console.error('Connect sheet error:', err);
+      onShowToast('error', 'Connection Error', err.message || 'Could not access sheet. Verify sharing permissions.');
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // 4. Restore / Read from Google Sheet Backup
+  const handleRestoreFromSheet = async () => {
+    if (!accessToken || !connectedSheetId) {
+      onShowToast('error', 'No Connected Sheet', 'Please connect a Google Sheet before reading backup.');
+      return;
+    }
+
+    setIsRestoring(true);
+    try {
+      const tabNames = ALL_28_SHEET_TABS.map((t) => t.name);
+      const sheetData = await readAllERPDataFromSheet(accessToken, connectedSheetId, tabNames);
+
+      let totalRestoredCells = 0;
+      const foundTabs: string[] = [];
+      Object.entries(sheetData).forEach(([tab, rows]) => {
+        if (rows.length > 0) {
+          foundTabs.push(tab);
+          totalRestoredCells += rows.length;
+        }
+      });
+
+      onShowToast(
+        'success',
+        'Google Sheet Backup Verified & Read',
+        `Read ${foundTabs.length} sheet tabs containing ${totalRestoredCells} total data rows from Google Sheets.`,
+        connectedSheetInfo?.url
+      );
+    } catch (err: any) {
+      onShowToast('error', 'Restore Verification Error', err.message || 'Failed to read data from sheet.');
+    } finally {
+      setIsRestoring(false);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden text-slate-900 dark:text-slate-100">
         {/* Header */}
-        <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-gradient-to-r from-emerald-900/10 via-emerald-800/5 to-transparent">
+        <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/40">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/20">
-              <FileSpreadsheet className="w-6 h-6" />
+            <div className="p-2.5 rounded-xl bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 border border-emerald-600/20">
+              <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Google Sheets Enterprise Database Hub
-                </h2>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                  Live 2-Way Sync
+              <h2 className="text-base font-bold flex items-center gap-2">
+                Google Sheets Enterprise Database Hub
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                  28 Sheets Database
                 </span>
-              </div>
+              </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Synchronize, store, and manage school records directly in your institutional Google Spreadsheets.
+                Connected Google Sheet master database with auto date save, two-way sync, and instant backup.
               </p>
             </div>
           </div>
@@ -516,442 +416,448 @@ export const GoogleSheetSyncModal: React.FC<GoogleSheetSyncModalProps> = ({
           </button>
         </div>
 
-        {/* Auth Notice if not signed in */}
-        {!accessToken ? (
-          <div className="p-8 text-center space-y-4 my-auto">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center mx-auto">
-              <Link2 className="w-7 h-7" />
-            </div>
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Google Workspace OAuth Permission Required
-            </h3>
-            <p className="text-xs text-slate-500 max-w-md mx-auto">
-              To store and sync data with Google Sheets, authorize Google Workspace access with the spreadsheets scope.
-            </p>
-            <button
-              onClick={onAuthenticate}
-              className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-2 mx-auto"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-              </svg>
-              <span>Connect Google Account</span>
-            </button>
+        {/* Connection Status Banner */}
+        <div className="px-5 py-3 bg-slate-100/70 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700/60 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="text-slate-500 dark:text-slate-400 font-medium">Database Target:</span>
+            {connectedSheetInfo ? (
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  {connectedSheetInfo.title}
+                </span>
+                <a
+                  href={connectedSheetInfo.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 text-[11px]"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open in Google Sheets
+                </a>
+              </div>
+            ) : (
+              <span className="text-amber-600 dark:text-amber-400 flex items-center gap-1 font-medium">
+                <AlertTriangle className="w-4 h-4" />
+                No active spreadsheet linked yet
+              </span>
+            )}
           </div>
-        ) : (
-          <>
-            {/* Navigation Tabs */}
-            <div className="flex border-b border-slate-100 dark:border-slate-800 px-6 bg-slate-50/50 dark:bg-slate-900/50">
-              <button
-                onClick={() => setActiveTab('sync')}
-                className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center gap-2 transition-all ${
-                  activeTab === 'sync'
-                    ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Database className="w-4 h-4" />
-                <span>Store &amp; Sync Data</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('connect')}
-                className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center gap-2 transition-all ${
-                  activeTab === 'connect'
-                    ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Link2 className="w-4 h-4" />
-                <span>Connect / Create Sheet</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('history')}
-                className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center gap-2 transition-all ${
-                  activeTab === 'history'
-                    ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>Sync Activity Log</span>
-                {syncHistory.length > 0 && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200 dark:bg-slate-800 font-semibold">
-                    {syncHistory.length}
-                  </span>
-                )}
-              </button>
-            </div>
 
-            {/* Body */}
-            <div className="p-6 overflow-y-auto flex-1 space-y-6">
-              {/* Active Connection Banner */}
-              {connectedSheetInfo ? (
-                <div className="p-4 rounded-2xl bg-emerald-50/80 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-                      <FileSpreadsheet className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                        <span>{connectedSheetInfo.title}</span>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                        <span>Tabs: {connectedSheetInfo.sheets.join(', ') || 'Multi-Tab'}</span>
-                        {connectedSheetInfo.lastSynced && (
-                          <span>· Last Synced: {connectedSheetInfo.lastSynced}</span>
-                        )}
-                      </div>
-                    </div>
+          <div className="flex items-center gap-3">
+            {connectedSheetInfo?.lastSynced && (
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" />
+                Last Saved: <strong className="text-slate-700 dark:text-slate-300">{connectedSheetInfo.lastSynced}</strong>
+              </span>
+            )}
+            {autoSaveEnabled && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 flex items-center gap-1">
+                <Zap className="w-3 h-3 text-indigo-500 animate-pulse" />
+                Auto Date Save: ON ({autoSaveInterval}m)
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Tab Navigation */}
+        <div className="px-5 border-b border-slate-200 dark:border-slate-800 flex gap-4 text-xs font-semibold">
+          <button
+            onClick={() => setActiveTab('sync')}
+            className={`py-3 border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === 'sync'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            28-Sheet Master Backup ({selectedCount}/28)
+          </button>
+          <button
+            onClick={() => setActiveTab('connect')}
+            className={`py-3 border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === 'connect'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Link2 className="w-4 h-4" />
+            Connect Existing Sheet
+          </button>
+          <button
+            onClick={() => setActiveTab('autosave')}
+            className={`py-3 border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === 'autosave'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            Auto Date Save Settings
+          </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`py-3 border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === 'history'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Database className="w-4 h-4" />
+            Sync History ({syncHistory.length})
+          </button>
+        </div>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {activeTab === 'sync' && (
+            <div className="space-y-5">
+              {/* Top Configuration Card */}
+              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Master Spreadsheet Name:
                   </div>
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={connectedSheetInfo.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-emerald-500 text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 transition-colors shadow-xs"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>Open in Sheets</span>
-                    </a>
-                  </div>
+                  <input
+                    type="text"
+                    value={sheetTitle}
+                    onChange={(e) => setSheetTitle(e.target.value)}
+                    className="w-full md:w-96 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    placeholder="Oakridge Academy - Central Master Database"
+                  />
                 </div>
-              ) : (
-                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2.5 text-amber-800 dark:text-amber-300 font-medium">
-                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
-                    <span>No master Google Sheet connected yet. Create one automatically or connect an existing one below.</span>
-                  </div>
+
+                <div className="flex items-center gap-2 self-end md:self-auto">
                   <button
-                    onClick={() => setActiveTab('connect')}
-                    className="px-3 py-1 rounded-lg bg-amber-600 text-white text-xs font-bold shadow-xs hover:bg-amber-700 shrink-0"
+                    onClick={() => toggleAll(true)}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-1"
                   >
-                    Set Up Sheet
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    Select All (28)
+                  </button>
+                  <button
+                    onClick={() => toggleAll(false)}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex items-center gap-1"
+                  >
+                    <Square className="w-3.5 h-3.5" />
+                    Clear All
                   </button>
                 </div>
-              )}
+              </div>
 
-              {/* TAB 1: STORE & SYNC DATA */}
-              {activeTab === 'sync' && (
-                <div className="space-y-6">
-                  <div>
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-                      Select School Datasets to Store in Google Sheet
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                      {/* Students */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.students}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, students: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Student Roster ({students.length} records)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Admission numbers, contact details, parent info, balances.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Attendance */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.attendance}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, attendance: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Daily Attendance ({attendance.length} logs)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Class sessions, present/absent/late counts, gate timestamps.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Fee Payments */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.payments}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, payments: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Fee Payments Ledger ({payments.length} receipts)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Payment receipts, amounts, methods, cashiers, timestamps.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Fee Invoices */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.invoices}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, invoices: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Fee Invoices ({invoices.length} invoices)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Terms, total fees, balances, overdue statuses.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Expenses */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.expenses}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, expenses: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Expense Vouchers ({expenses.length} vouchers)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Operational disbursements, categories, approvals.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Staff & HR */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.employees}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, employees: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Staff &amp; Faculty ({employees.length} members)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Designations, departments, contact, salaries.
-                          </div>
-                        </div>
-                      </label>
-
-                      {/* Inventory */}
-                      <label className="flex items-start gap-3 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-indigo-400 cursor-pointer bg-slate-50/50 dark:bg-slate-800/30 sm:col-span-2">
-                        <input
-                          type="checkbox"
-                          checked={syncSelections.inventory}
-                          onChange={(e) =>
-                            setSyncSelections((prev) => ({ ...prev, inventory: e.target.checked }))
-                          }
-                          className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500"
-                        />
-                        <div>
-                          <div className="font-bold text-slate-800 dark:text-slate-200">
-                            Campus Inventory &amp; POS ({inventory.length} items)
-                          </div>
-                          <div className="text-[11px] text-slate-500">
-                            Stock quantities, SKU codes, unit values, low stock alerts.
-                          </div>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Sync Trigger Action */}
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-white">
-                        Ready to Synchronize
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        Writes formatted header rows and institutional records to the target Google Sheet.
-                      </div>
-                    </div>
-                    {connectedSheetInfo ? (
-                      <button
-                        onClick={handleSyncToCurrentSheet}
-                        disabled={isProcessing}
-                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 shrink-0 transition-all cursor-pointer"
-                      >
-                        <RefreshCw className={`w-4 h-4 ${isProcessing ? 'animate-spin' : ''}`} />
-                        <span>{isProcessing ? 'Synchronizing to Sheet...' : 'Sync to Connected Sheet'}</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={handleCreateMasterSheet}
-                        disabled={isProcessing}
-                        className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 shrink-0 transition-all cursor-pointer"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>{isProcessing ? 'Creating Sheet...' : 'Create & Sync Master Sheet'}</span>
-                      </button>
-                    )}
-                  </div>
+              {/* Filter and Quick Stats */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    placeholder="Search 28 tables (e.g. Fees, Attendance, Transport)..."
+                    className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
-              )}
-
-              {/* TAB 2: CONNECT / CREATE SHEET */}
-              {activeTab === 'connect' && (
-                <div className="space-y-6">
-                  {/* Option A: Create Brand New Multi-Tab Master Sheet */}
-                  <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 bg-white dark:bg-slate-900 shadow-xs">
-                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                      <Plus className="w-4 h-4" />
-                      <span>Option A: Create New Master Database Spreadsheet</span>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      Generates a professional multi-tab Google Spreadsheet with color-coded tabs for Students, Attendance, Fees, Expenses, Staff, and Inventory.
-                    </p>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Spreadsheet Title
-                      </label>
-                      <input
-                        type="text"
-                        value={sheetTitle}
-                        onChange={(e) => setSheetTitle(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:border-emerald-500"
-                        placeholder="Enter spreadsheet title..."
-                      />
-                    </div>
-                    <button
-                      onClick={handleCreateMasterSheet}
-                      disabled={isProcessing}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>{isProcessing ? 'Creating in Google Drive...' : 'Create Multi-Tab Master Sheet'}</span>
-                    </button>
-                  </div>
-
-                  {/* Option B: Connect to Existing Spreadsheet */}
-                  <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 bg-white dark:bg-slate-900 shadow-xs">
-                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-600 dark:text-indigo-400">
-                      <Link2 className="w-4 h-4" />
-                      <span>Option B: Connect Existing Google Spreadsheet</span>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      Paste the URL or Spreadsheet ID of any existing Google Sheet you own or have edit access to.
-                    </p>
-                    <div className="space-y-1">
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
-                        Spreadsheet ID or Share URL
-                      </label>
-                      <input
-                        type="text"
-                        value={sheetInput}
-                        onChange={(e) => setSheetInput(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 outline-none focus:border-indigo-500 font-mono text-[11px]"
-                        placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
-                      />
-                    </div>
-                    <button
-                      onClick={handleConnectExistingSheet}
-                      disabled={isProcessing}
-                      className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 transition-all cursor-pointer"
-                    >
-                      <Link2 className="w-4 h-4" />
-                      <span>{isProcessing ? 'Connecting...' : 'Connect Spreadsheet'}</span>
-                    </button>
-                  </div>
+                <div className="text-slate-500 dark:text-slate-400 text-xs">
+                  Selected: <strong className="text-indigo-600 dark:text-indigo-400">{selectedCount}</strong> tabs | Est. Records: <strong className="text-slate-700 dark:text-slate-200">{totalRecordsToSync}</strong>
                 </div>
-              )}
+              </div>
 
-              {/* TAB 3: SYNC ACTIVITY LOG */}
-              {activeTab === 'history' && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-slate-900 dark:text-white">
-                      Google Sheets Synchronization History
-                    </h3>
-                    {syncHistory.length > 0 && (
-                      <button
-                        onClick={() => {
-                          setSyncHistory([]);
-                          localStorage.removeItem('oakridge_sheets_sync_history');
-                        }}
-                        className="text-[11px] text-slate-400 hover:text-rose-500"
-                      >
-                        Clear Log
-                      </button>
-                    )}
-                  </div>
-
-                  {syncHistory.length === 0 ? (
-                    <div className="py-12 text-center text-xs text-slate-400">
-                      No synchronization events recorded yet. Click "Store &amp; Sync Data" to push your first update.
-                    </div>
-                  ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800 text-xs">
-                      {syncHistory.map((item) => (
-                        <div key={item.id} className="py-3 flex items-start justify-between gap-4">
-                          <div className="flex items-start gap-3">
-                            <div className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 shrink-0 mt-0.5">
-                              <CheckCircle2 className="w-4 h-4" />
-                            </div>
-                            <div>
-                              <div className="font-semibold text-slate-900 dark:text-white">
-                                {item.message}
-                              </div>
-                              <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
-                                <span>{item.timestamp}</span>
-                                <span>· Updated: {item.tabsUpdated.join(', ')}</span>
-                              </div>
-                            </div>
-                          </div>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 shrink-0">
-                            {item.recordsCount} rows
+              {/* 28 Sheets Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {filteredTabs.map((tab) => {
+                  const isChecked = !!selectedTabs[tab.id];
+                  const count = tab.recordCount(fullDatasets);
+                  return (
+                    <label
+                      key={tab.id}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start gap-2.5 select-none ${
+                        isChecked
+                          ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30'
+                          : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 opacity-60 hover:opacity-100'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) =>
+                          setSelectedTabs((prev) => ({
+                            ...prev,
+                            [tab.id]: e.target.checked,
+                          }))
+                        }
+                        className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-bold text-xs text-slate-800 dark:text-slate-200 truncate">
+                            {tab.name}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+                            {count} rows
                           </span>
                         </div>
-                      ))}
-                    </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1 mt-0.5">
+                          {tab.purpose}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-200 dark:border-slate-800">
+                <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                  Format: Multi-tab colored spreadsheets with automated headers &amp; schema check.
+                </div>
+
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  {connectedSheetId && (
+                    <button
+                      onClick={handleRestoreFromSheet}
+                      disabled={isRestoring || isProcessing}
+                      className="px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 font-bold text-xs text-slate-700 dark:text-slate-200 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    >
+                      <Upload className="w-4 h-4 text-amber-500" />
+                      <span>{isRestoring ? 'Reading Backup...' : 'Read Backup'}</span>
+                    </button>
                   )}
+
+                  {connectedSheetId ? (
+                    <button
+                      onClick={handleSyncToConnectedSheet}
+                      disabled={isProcessing || selectedCount === 0}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    >
+                      {isProcessing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Pushing to Google Sheets...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4" />
+                          <span>Sync Live Database ({selectedCount} Sheets)</span>
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleCreateAndSyncMaster}
+                      disabled={isProcessing || selectedCount === 0}
+                      className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    >
+                      {isProcessing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Creating 28-Sheet Database...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-4 h-4" />
+                          <span>Create &amp; Sync Master Spreadsheet</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'connect' && (
+            <div className="max-w-xl mx-auto py-6 space-y-6">
+              <div className="text-center space-y-1.5">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 mx-auto flex items-center justify-center">
+                  <Link2 className="w-6 h-6" />
+                </div>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Connect Existing Google Spreadsheet
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+                  Paste the Google Sheets URL or ID. The ERP will automatically create any missing tabs among the 28 institutional sheets and maintain two-way synchronization.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Google Spreadsheet URL or ID:
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={sheetInput}
+                    onChange={(e) => setSheetInput(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Tip: Ensure the spreadsheet is accessible by your logged-in Google Workspace account.
+                </p>
+              </div>
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button
+                  onClick={() => setActiveTab('sync')}
+                  className="px-4 py-2 rounded-xl text-xs font-bold border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConnectExisting}
+                  disabled={isProcessing || !sheetInput.trim()}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-2 disabled:opacity-50"
+                >
+                  {isProcessing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Verifying Sheet...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Link2 className="w-4 h-4" />
+                      <span>Link Spreadsheet</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'autosave' && (
+            <div className="max-w-2xl mx-auto py-4 space-y-6">
+              <div className="p-5 rounded-2xl bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 flex items-start gap-4">
+                <div className="p-2.5 rounded-xl bg-indigo-600 text-white shrink-0">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Automated Date Save &amp; Google Sheet Backup
+                  </h3>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                    When enabled, the ERP automatically timestamps each transaction, student admission, attendance log, and fee payment, periodically writing back full 28-sheet backups to your connected Google Sheet database in the background without user intervention.
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-5">
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-700">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Auto Date Save Status
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Enable or disable automated background synchronization with Google Sheets.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onToggleAutoSave?.(!autoSaveEnabled)}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      autoSaveEnabled ? 'bg-indigo-600' : 'bg-slate-300 dark:bg-slate-600'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        autoSaveEnabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-700">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Auto-Save Frequency (Interval)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      How frequently data should automatically be committed to Google Sheets.
+                    </p>
+                  </div>
+                  <select
+                    value={autoSaveInterval}
+                    onChange={(e) => onChangeAutoSaveInterval?.(Number(e.target.value))}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value={5}>Every 5 Minutes</option>
+                    <option value={10}>Every 10 Minutes</option>
+                    <option value={15}>Every 15 Minutes (Default)</option>
+                    <option value={30}>Every 30 Minutes</option>
+                    <option value={60}>Every 1 Hour</option>
+                  </select>
+                </div>
+
+                <div className="text-xs space-y-2 text-slate-600 dark:text-slate-400">
+                  <div className="flex justify-between">
+                    <span>Target Google Sheet:</span>
+                    <strong className="text-slate-900 dark:text-white">
+                      {connectedSheetInfo?.title || 'None connected'}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Last Automated Backup:</span>
+                    <span className="font-mono text-emerald-600 font-bold">
+                      {lastAutoSaveTime || connectedSheetInfo?.lastSynced || 'Pending initial cycle'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Sheets Included:</span>
+                    <span>All 28 Institutional Tabs</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Google Sheets Synchronization Audit Log
+                </h3>
+                {syncHistory.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setSyncHistory([]);
+                      localStorage.removeItem('oakridge_sheets_sync_history');
+                    }}
+                    className="text-[11px] text-rose-500 hover:underline font-semibold"
+                  >
+                    Clear History
+                  </button>
+                )}
+              </div>
+
+              {syncHistory.length === 0 ? (
+                <div className="p-8 text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-xs text-slate-400">
+                  No previous synchronization operations recorded yet.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-slate-800 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden text-xs">
+                  {syncHistory.map((item) => (
+                    <div key={item.id} className="p-3.5 flex items-center justify-between hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          <span className="font-bold text-slate-800 dark:text-slate-200">
+                            {item.message}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 pl-6">
+                          Updated {item.tabsUpdated.length} tabs • {item.recordsCount} records synchronized
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-400">
+                        {item.timestamp}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/60 flex items-center justify-between text-xs text-slate-500">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span>Google Sheets API v4 Secure Proxy Active</span>
-              </div>
-              <button
-                onClick={onClose}
-                className="px-4 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
-              >
-                Close
-              </button>
-            </div>
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

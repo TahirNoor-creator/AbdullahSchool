@@ -32,17 +32,29 @@ import {
   Contact,
   QrCode,
   BarChart3,
+  BookOpen,
+  Bus,
+  MessageSquare,
+  BarChart2,
+  Wrench,
+  Clock,
 } from 'lucide-react';
 
 export type ERPView =
   | 'command-center'
   | 'analytics'
   | 'qr-scanner'
+  | 'smart-forms'
   | 'students'
   | 'attendance'
+  | 'timetable'
   | 'fees-invoicing'
   | 'expenses'
   | 'exams'
+  | 'library'
+  | 'transport'
+  | 'communication'
+  | 'reports-center'
   | 'hr-payroll'
   | 'inventory-pos'
   | 'multi-campus'
@@ -55,6 +67,7 @@ export type ERPView =
   | 'gemini-thinking'
   | 'security-roles'
   | 'backup-integrity'
+  | 'sync-fixer'
   | 'appearance'
   | 'setup-wizard';
 
@@ -74,7 +87,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'COMMAND ROOM',
       items: [
         { id: 'command-center' as ERPView, label: 'ERP Command Center', icon: LayoutDashboard, badge: 'Live' },
+        { id: 'smart-forms' as ERPView, label: 'Admin & Smart Forms', icon: FormInput, badge: 'Studio' },
         { id: 'analytics' as ERPView, label: 'Institutional Analytics', icon: BarChart3, badge: 'KPI' },
+        { id: 'reports-center' as ERPView, label: 'Comprehensive Reports', icon: FileSpreadsheet, badge: 'Audit' },
         { id: 'qr-scanner' as ERPView, label: 'QR Scanner & Gate Pass', icon: QrCode, badge: 'Scanner' },
         { id: 'approvals' as ERPView, label: 'Approval Workflows', icon: CheckSquare2, badge: pendingApprovalsCount > 0 ? String(pendingApprovalsCount) : undefined },
       ],
@@ -83,8 +98,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'ACADEMICS & STUDENTS',
       items: [
         { id: 'students' as ERPView, label: 'Student Directory & Admissions', icon: Users },
+        { id: 'timetable' as ERPView, label: 'Timetable & Scheduling', icon: Clock, badge: 'Smart' },
         { id: 'attendance' as ERPView, label: 'Daily Attendance', icon: CalendarCheck },
         { id: 'exams' as ERPView, label: 'Exams & Report Cards', icon: GraduationCap },
+        { id: 'library' as ERPView, label: 'Library Management', icon: BookOpen, badge: 'Books' },
+        { id: 'transport' as ERPView, label: 'Transport & Fleet', icon: Bus, badge: 'Fleet' },
+        { id: 'communication' as ERPView, label: 'Notices & Communications', icon: MessageSquare, badge: 'SMS/Email' },
         { id: 'multi-campus' as ERPView, label: 'Multi-Campus Hub', icon: Building },
       ],
     },
@@ -118,6 +137,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         { id: 'security-roles' as ERPView, label: 'Roles, Permissions & Audit', icon: ShieldCheck },
         { id: 'backup-integrity' as ERPView, label: 'Backup & Data Integrity', icon: Database },
+        { id: 'sync-fixer' as ERPView, label: 'Sync Conflicts & Fixer', icon: Wrench, badge: 'Auto-Fix' },
         { id: 'appearance' as ERPView, label: 'Appearance & Themes', icon: Palette },
         { id: 'setup-wizard' as ERPView, label: 'ERP Setup Wizard', icon: Compass, badge: '12-Step' },
       ],

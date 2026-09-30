@@ -233,18 +233,49 @@ export interface Announcement {
   active: boolean;
 }
 
+export interface ApprovalAuditEntry {
+  action: 'Created' | 'Submitted' | 'Approved' | 'Rejected' | 'Posted' | 'Cancelled';
+  actor: string;
+  role: string;
+  timestamp: string;
+  notes?: string;
+  reason?: string;
+}
+
 export interface ApprovalRequest {
   id: string;
   title: string;
-  type: 'Admission' | 'Fee Discount' | 'Fee Refund' | 'Purchase' | 'Expense' | 'Payroll' | 'Result Publication';
+  type:
+    | 'Student Fee Collection'
+    | 'Fee Discount'
+    | 'Fee Refund'
+    | 'Purchase'
+    | 'Expense'
+    | 'Payroll'
+    | 'Supplier Payment'
+    | 'Admission'
+    | 'Result Publication'
+    | 'Other';
   requesterName: string;
   requesterRole: string;
   amount?: number;
   details: string;
-  status: 'Draft' | 'Submitted' | 'Pending Approval' | 'Approved' | 'Posted' | 'Rejected';
+  status: 'Draft' | 'Submitted' | 'Pending Approval' | 'Approved' | 'Posted' | 'Rejected' | 'Cancelled';
   submittedDate: string;
-  approver?: string;
+  studentId?: string;
+  studentName?: string;
+  createdBy: string;
+  createdRole: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  postedBy?: string;
+  postedAt?: string;
+  rejectionReason?: string;
+  cancellationReason?: string;
   comments?: string;
+  auditTrail?: ApprovalAuditEntry[];
 }
 
 export interface AuditLog {
@@ -267,3 +298,110 @@ export interface HealthCheckItem {
   details: string;
   suggestedAction?: string;
 }
+
+export type WeekDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
+
+export interface TimetableSlot {
+  id: string;
+  day: WeekDay;
+  period: number; // 1 to 8
+  periodName?: string;
+  startTime: string; // e.g. "08:30"
+  endTime: string; // e.g. "09:15"
+  className: string; // e.g. "Grade 10"
+  section: string; // e.g. "A"
+  subject: string;
+  teacherId: string;
+  teacherName: string;
+  room: string;
+  type: 'Lecture' | 'Lab' | 'Tutorial' | 'Assembly' | 'Break' | 'Activity';
+  campusId?: string;
+  substituteTeacherId?: string;
+  substituteTeacherName?: string;
+  notes?: string;
+}
+
+export interface SubstituteRecord {
+  id: string;
+  date: string;
+  originalTeacherId: string;
+  originalTeacherName: string;
+  substituteTeacherId: string;
+  substituteTeacherName: string;
+  slotId: string;
+  day: WeekDay;
+  period: number;
+  className: string;
+  section: string;
+  subject: string;
+  room: string;
+  reason: string;
+  status: 'Assigned' | 'Completed' | 'Cancelled';
+  assignedBy: string;
+  assignedAt: string;
+}
+
+export interface TimetableConflict {
+  id: string;
+  type: 'teacher_double_booking' | 'room_double_booking' | 'class_overlap' | 'duplicate_subject' | 'workload_exceeded';
+  severity: 'high' | 'warning';
+  title: string;
+  description: string;
+  day: WeekDay;
+  period: number;
+  slotA: TimetableSlot;
+  slotB?: TimetableSlot;
+}
+
+export interface SmartDocumentFile {
+  id: string;
+  title: string;
+  category:
+    | 'student_photo'
+    | 'staff_photo'
+    | 'id_document'
+    | 'certificate'
+    | 'admission_doc'
+    | 'employee_doc'
+    | 'book_image'
+    | 'vehicle_doc'
+    | 'institutional';
+  fileName: string;
+  fileSize: string;
+  mimeType: string;
+  uploadedAt: string;
+  uploadedBy: string;
+  associatedId?: string;
+  associatedName?: string;
+  fileUrl: string;
+  status: 'Verified' | 'Pending Review' | 'Archived';
+  notes?: string;
+}
+
+export interface AdminUserRecord {
+  id: string;
+  username: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  role: UserRole;
+  department: string;
+  status: 'Active' | 'Inactive';
+  photoUrl?: string;
+  permissions: {
+    canView: boolean;
+    canAdd: boolean;
+    canEdit: boolean;
+    canDelete: boolean;
+    canApprove: boolean;
+    canPost: boolean;
+    canManageSettings: boolean;
+  };
+  allowedModules: string[];
+  lastLogin?: string;
+  loginCount: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+}
+

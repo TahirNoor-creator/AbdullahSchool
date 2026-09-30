@@ -299,17 +299,87 @@ export async function createMultiTabMasterSpreadsheet(
   return { spreadsheetId, spreadsheetUrl };
 }
 
+export async function ensureTabsExistInSpreadsheet(
+  token: string,
+  spreadsheetId: string,
+  tabs: Array<{ title: string; tabColor?: { red: number; green: number; blue: number } }>
+): Promise<string[]> {
+  try {
+    const info = await getSpreadsheetInfo(token, spreadsheetId);
+    const existingTitles = new Set(info.sheets);
+    const missingTabs = tabs.filter((t) => !existingTitles.has(t.title));
+
+    if (missingTabs.length > 0) {
+      const requests = missingTabs.map((tab) => ({
+        addSheet: {
+          properties: {
+            title: tab.title,
+            tabColor: tab.tabColor || { red: 0.3, green: 0.5, blue: 0.8 },
+          },
+        },
+      }));
+
+      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests }),
+      });
+    }
+
+    return [...existingTitles, ...missingTabs.map((t) => t.title)];
+  } catch (err) {
+    console.warn('Could not auto-verify/add tabs:', err);
+    return [];
+  }
+}
+
 export async function syncAllERPDataToSheet(
   token: string,
   spreadsheetId: string,
   tabs: MasterTabConfig[]
 ): Promise<any> {
+  // 1. Ensure all requested tabs exist in the target spreadsheet
+  await ensureTabsExistInSpreadsheet(token, spreadsheetId, tabs);
+
+  // 2. Clear old data or overwrite from A1
   const batchData = tabs.map((tab) => ({
     range: `${tab.title}!A1`,
     values: [tab.headers, ...tab.rows],
   }));
 
   return await batchUpdateSpreadsheetValues(token, spreadsheetId, batchData);
+}
+
+export async function readAllERPDataFromSheet(
+  token: string,
+  spreadsheetId: string,
+  tabNames: string[]
+): Promise<Record<string, (string | number)[][]>> {
+  const ranges = tabNames.map((tab) => encodeURIComponent(`${tab}!A1:Z500`));
+  const rangesQuery = ranges.map((r) => `ranges=${r}`).join('&');
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchGet?${rangesQuery}`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || 'Failed to read backup data from Google Sheets');
+  }
+
+  const data = await res.json();
+  const result: Record<string, (string | number)[][]> = {};
+
+  (data.valueRanges || []).forEach((vr: any, idx: number) => {
+    const tabName = tabNames[idx] || `Sheet${idx + 1}`;
+    result[tabName] = vr.values || [];
+  });
+
+  return result;
 }
 
 // 3. Gmail APIs
